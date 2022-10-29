@@ -85,6 +85,7 @@ extern uint64_t downlink_frequency[MAX_NUM_CCs][4];
 #endif
 
 unsigned int gain_table[31] = {100,112,126,141,158,178,200,224,251,282,316,359,398,447,501,562,631,708,794,891,1000,1122,1258,1412,1585,1778,1995,2239,2512,2818,3162};
+int track_first_time = 1;
 
 void nr_fill_dl_indication(nr_downlink_indication_t *dl_ind,
                            fapi_nr_dci_indication_t *dci_ind,
@@ -2119,4 +2120,91 @@ void nr_ue_prach_procedures(PHY_VARS_NR_UE *ue, UE_nr_rxtx_proc_t *proc, uint8_t
 
   VCD_SIGNAL_DUMPER_DUMP_FUNCTION_BY_NAME(VCD_SIGNAL_DUMPER_FUNCTIONS_PHY_PROCEDURES_UE_TX_PRACH, VCD_FUNCTION_OUT);
 
+}
+
+void UE_TrackSync_thread(void*arg)
+{
+  nr_rxtx_thread_data_t *syncD=(nr_rxtx_thread_data_t *) arg;
+  PHY_VARS_NR_UE *UE = syncD->UE;
+  int WinLen = (UE->SYNC_mode[0]==WAIT_SYNC)?UE->frame_parms.ofdm_symbol_size<<1 : UE->max_delay_offset <<5;
+  int TrackPosition = UE->sync_pos_frame+UE->frame_parms.nb_prefix_samples; // sync pss position
+  int  sync_offset;
+  static int count_max_pos_ok = 0;
+  static int count_max_pos_failed = 0;
+
+  short coef = 16384;
+  short ncoef = 32767 - coef;
+
+  // LOG_I(PHY,"[TRACK SYNC] Search position = %d, range = %d (samples)\n",TrackPosition,WinLen);
+  if(0==nr_track_sync(UE, TrackPosition, WinLen, 0)){
+    //------------------------------------------ Calculate rx_offset ------------------------------------------//
+    int max_pos = UE->ssb_offset - UE->sync_pos_frame;
+    UE->max_pos_fil = ((UE->max_pos_fil * coef) + (max_pos * ncoef)) >> 15; // filter position to reduce jitter
+    int diff = UE->max_pos_fil;
+    if (UE->frame_parms.freq_range==nr_FR2) 
+      sync_offset = 2;
+    else
+      sync_offset = 0;
+    if ( abs(diff) < (SYNCH_HYST+sync_offset) )
+      UE->rx_offset = 0;
+    else{
+      UE->rx_offset = diff;
+    }
+      UE->delay_offset = UE->rx_offset - UE->delay_offset;
+  
+    //------------------------------------------ FSM ------------------------------------------//
+    if(UE->SYNC_mode[0] == WAIT_SYNC){
+          if(abs(diff)<=10){
+            count_max_pos_ok ++;
+            count_max_pos_failed=0;
+          }else{
+            count_max_pos_ok = 0;
+            count_max_pos_failed ++;
+          }
+          if(count_max_pos_ok >= 10){
+            UE->SYNC_mode[0] = TRACK_SYNC;
+            count_max_pos_ok = 0;
+            LOG_W(PHY, "[SYNC FSM] Sync mode switch(wait->track).\n");
+          }
+          if (count_max_pos_failed>=10){
+              UE->SYNC_mode[0] = INIT_SYNC;
+              track_first_time = 1;
+              UE->lost_sync = 1;
+              LOG_W(PHY, "[SYNC FSM] Sync mode switch(wait->init).\n");
+          } 
+    }else if(UE->SYNC_mode[0] == TRACK_SYNC){
+          if(abs(diff)>10)
+            count_max_pos_failed ++;
+          else{
+            count_max_pos_failed = 0;
+          }
+          if(count_max_pos_failed >= 10){
+            UE->SYNC_mode[0] = INIT_SYNC;
+            track_first_time = 1;
+            UE->lost_sync = 1;
+            LOG_W(PHY, "[SYNC FSM] Sync mode switch(track->init).\n");
+            AssertFatal(0,"TRACK SYNC FAILED\n");
+          }
+    }else{
+          AssertFatal(0,"Unexpected SYNC_mode\n");
+    }
+
+    //------------------------------------------ CFO compensate sequence calcu ------------------------------------------//
+    // if(UE->UE_fo_compensation){
+    //         double s_time = 1/(1.0e3*UE->frame_parms.samples_per_subframe);  // sampling time
+    //         double off_angle = 2*M_PI*s_time*(UE->track_sync_fo);  // ue->track_sync_fo为跟踪同步时计算得到的频偏（每帧一次）
+    //         int end = UE->frame_parms.samples_per_slot0;
+    //         for(int n=0; n<end; n++){
+    //             UE->common_vars.cfo_compen_sin[n] = sin(n*off_angle);
+    //             UE->common_vars.cfo_compen_cos[n] = cos(n*off_angle);
+    //         }
+    // }   
+  }else{ // TRACK SYNC FAILED
+    UE->SYNC_mode[0] = INIT_SYNC;
+    track_first_time = 1;
+    UE->lost_sync = 1;
+    LOG_W(PHY, "[SYNC FSM] Sync mode switch(track->init).\n");
+    AssertFatal(0,"TRACK SYNC FAILED\n");
+  }
+  return;
 }
