@@ -240,6 +240,8 @@ int nr_initial_sync(UE_nr_rxtx_proc_t *proc,
     sync_pos = pss_synchro_nr(ue, is, NO_RATE_CHANGE);
     if (sync_pos<0) continue;  // 如果PSS检测失败，则不进行频偏补偿等操作
     
+    ue->initial_sync_pos = is*fp->samples_per_frame + sync_pos; //同步头PHY RX BUFFER绝对位置
+
     if (sync_pos >= fp->nb_prefix_samples)
       ue->ssb_offset = sync_pos - fp->nb_prefix_samples;
     else
@@ -309,12 +311,13 @@ int nr_initial_sync(UE_nr_rxtx_proc_t *proc,
         // every 7*(1<<mu) symbols there is a different prefix length (38.211 5.3.1)
         int n_symb_prefix0 = (ue->symbol_offset/(7*(1<<mu)))+1;
         sync_pos_frame = n_symb_prefix0*(fp->ofdm_symbol_size + fp->nb_prefix_samples0)+(ue->symbol_offset-n_symb_prefix0)*(fp->ofdm_symbol_size + fp->nb_prefix_samples);
+        ue->sync_pos_frame = sync_pos_frame;
         // for a correct computation of frame number to sync with the one decoded at MIB we need to take into account in which of the n_frames we got sync
         ue->init_sync_frame = n_frames - 1 - is;
         // we also need to take into account the shift by samples_per_frame in case the if is true
         if (ue->ssb_offset < sync_pos_frame){
           ue->rx_offset = fp->samples_per_frame - sync_pos_frame + ue->ssb_offset;
-          ue->init_sync_frame += 1;
+          // ue->init_sync_frame += 1;
         }
         else
           ue->rx_offset = ue->ssb_offset - sync_pos_frame;
@@ -554,5 +557,28 @@ int nr_initial_sync(UE_nr_rxtx_proc_t *proc,
   //  exit_fun("debug exit");
   VCD_SIGNAL_DUMPER_DUMP_FUNCTION_BY_NAME(VCD_SIGNAL_DUMPER_FUNCTIONS_NR_INITIAL_UE_SYNC, VCD_FUNCTION_OUT);
   return ret;
+}
+
+int nr_track_sync(PHY_VARS_NR_UE *ue,
+                    int position,int length, int predict_flag)
+{
+    int32_t sync_pos;
+    NR_DL_FRAME_PARMS *fp = &ue->frame_parms;
+    if(predict_flag)
+      return 0;
+    sync_pos = pss_track_synchro_nr(ue, position, length, NO_RATE_CHANGE);
+    if(sync_pos<0) return -1;
+
+    /* Calculate SSB position */
+    if (sync_pos >= fp->nb_prefix_samples)
+                ue->ssb_offset = sync_pos - fp->nb_prefix_samples;
+    else
+          ue->ssb_offset = sync_pos + (fp->samples_per_subframe * 10) - fp->nb_prefix_samples;
+
+    /* in case ssb in the second frame */
+    if (ue->ssb_offset > ue->frame_parms.samples_per_frame){
+          ue->ssb_offset +=  -ue->frame_parms.samples_per_frame;
+    }     
+    return 0;
 }
 

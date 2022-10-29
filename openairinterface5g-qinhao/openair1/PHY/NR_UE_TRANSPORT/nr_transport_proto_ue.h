@@ -1444,6 +1444,9 @@ int nr_initial_sync(UE_nr_rxtx_proc_t *proc,
                     int sa,
                     int dlsch_parallel);
 
+int nr_track_sync(PHY_VARS_NR_UE *ue,
+                    int position,int length, int predict_flag);
+
 /*!
   \brief This function gets the carrier frequencies either from FP or command-line-set global variables, depending on the availability of the latter
   @param fp         Pointer to frame params

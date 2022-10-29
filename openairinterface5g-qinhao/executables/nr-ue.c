@@ -91,12 +91,67 @@
 
 #define RX_JOB_ID 0x1010
 #define TX_JOB_ID 100
+#define MAX_OFFSET_PER_FRAME  12
+
 int slot_delay = 10;
 typedef enum {
   pss = 0,
   pbch = 1,
   si = 2
 } sync_mode_t;
+
+int syncUpdateTrack(PHY_VARS_NR_UE *UE, int position, int length)
+{
+  LOG_I(PHY,"<<<<<<<<<<<<<<<<<<<<< Track update Start >>>>>>>>>>>>>>>>>>>>>>\n");
+  LOG_I(PHY,"[UPDATE SYNC] Search position = %d, range = %d (samples)\n",position,length);
+  //* 滑动窗数据频偏补偿 *//
+  // if(UE->UE_fo_compensation){
+    
+  //     double im, re;
+  //     double s_time = 1/(1.0e3*UE->frame_parms.samples_per_subframe);  // sampling time
+  //     double off_angle = 2*M_PI*s_time*(UE->common_vars.freq_offset);
+  //     int start= position-(length>>1);
+  //     int end = position+(length>>1);
+  //     int ar = 0;
+  //     for(int n=start; n<end; n++){
+  //         re = ((double)(((short *)UE->common_vars.rxdata[ar]))[2*n]);
+  //         im = ((double)(((short *)UE->common_vars.rxdata[ar]))[2*n+1]);
+  //         ((short *)UE->common_vars.rxdata[ar])[2*n] = (short)(round(re*cos(n*off_angle) - im*sin(n*off_angle)));
+  //         ((short *)UE->common_vars.rxdata[ar])[2*n+1] = (short)(round(re*sin(n*off_angle) + im*cos(n*off_angle)));
+  //     }
+  // }
+  
+  if(nr_track_sync(UE, position, length, 0) == 0) {
+        LOG_I(PHY,"<<<<<<<<<<<<<<<<<<<<< Track update Success >>>>>>>>>>>>>>>>>>>>>>\n");
+        // LOG_W(PHY, "[SYNC FSM] Sync mode switch(init->wait).\n");
+        UE->SYNC_mode[0] = WAIT_SYNC; // set the next sync mode
+        UE->track_sync_fo += UE->common_vars.freq_offset;
+        UE->common_vars.freq_offset = 0;
+
+      /* Calculate rx_offset */
+        if (UE->ssb_offset < UE->sync_pos_frame){
+                      UE->rx_offset =  UE->frame_parms.samples_per_frame - UE->sync_pos_frame + UE->ssb_offset;
+                      UE->init_sync_frame += 1;
+                }
+        else
+              UE->rx_offset = UE->ssb_offset - UE->sync_pos_frame;
+        LOG_W(PHY, "[SYNC FSM] Sync mode switch(init->wait), rx_offset is %d \n",UE->rx_offset);
+        //**  计算频偏补偿序列  **//
+          //  if(UE->UE_fo_compensation){
+          //       double s_time = 1/(1.0e3*UE->frame_parms.samples_per_subframe);  // sampling time
+          //       double off_angle = 2*M_PI*s_time*(UE->track_sync_fo);  // ue->track_sync_fo为跟踪同步时计算得到的频偏（每帧一次）
+          //       int end = UE->frame_parms.samples_per_slot0;
+          //       for(int n=0; n<end; n++){
+          //           UE->common_vars.cfo_compen_sin[n] = sin(n*off_angle);
+          //           UE->common_vars.cfo_compen_cos[n] = cos(n*off_angle);
+          //       }
+          //       LOG_I(PHY,"[SYNC CFO] Update CFO compensation value %f \n",off_angle);
+          //   }
+}else{
+           AssertFatal(0,"UPDATE SYNC FAILED\n");
+}
+  return 0;
+}
 
 void init_nr_ue_vars(PHY_VARS_NR_UE *ue,
                      uint8_t UE_id,
@@ -212,7 +267,7 @@ static void UE_synch(void *arg) {
       nr_get_carrier_frequencies(UE, &dl_carrier, &ul_carrier);
       dl_carrier=openair0_cfg->rx_freq[0]; //doppler shift test
       ul_carrier=openair0_cfg->tx_freq[0]; //doppler shift test
-      
+
       if (nr_initial_sync(&syncD->proc, UE, 2, get_softmodem_params()->sa, get_nrUE_params()->nr_dlsch_parallel) == 0) {
         freq_offset = -UE->common_vars.freq_offset; // frequency offset computed with pss in initial sync
         hw_slot_offset = ((UE->rx_offset<<1) / UE->frame_parms.samples_per_subframe * UE->frame_parms.slots_per_subframe) +
@@ -404,6 +459,37 @@ void dummyWrite(PHY_VARS_NR_UE *UE,openair0_timestamp timestamp, int writeBlockS
     free(dummy_tx[i]);
 }
 
+//+++++++++++++++++add_yjn++++++读一帧的数据
+void read_one_frame(PHY_VARS_NR_UE *UE,  openair0_timestamp *timestamp, bool toTrash)
+{
+  void *rxp[NB_ANTENNAS_RX];
+  for(int x=0; x<10; x++) {  // one frames for initial sync
+    for (int slot=0; slot<UE->frame_parms.slots_per_subframe; slot ++ ) {
+      for (int i=0; i<UE->frame_parms.nb_antennas_rx; i++) {
+        if (toTrash)
+          rxp[i]=malloc16(UE->frame_parms.get_samples_per_slot(slot,&UE->frame_parms)*4);
+        else
+          rxp[i] = ((void *)&UE->common_vars.rxdata[i][0]) +
+                   4*((x*UE->frame_parms.samples_per_subframe)+
+                   UE->frame_parms.get_samples_slot_timestamp(slot,&UE->frame_parms,0));
+      }
+        
+      AssertFatal( UE->frame_parms.get_samples_per_slot(slot,&UE->frame_parms) ==
+                   UE->rfdevice.trx_read_func(&UE->rfdevice,
+                   timestamp,
+                   rxp,
+                   UE->frame_parms.get_samples_per_slot(slot,&UE->frame_parms),
+                   UE->frame_parms.nb_antennas_rx), "");
+
+      if (IS_SOFTMODEM_RFSIM)
+        dummyWrite(UE,*timestamp, UE->frame_parms.get_samples_per_slot(slot,&UE->frame_parms));
+      if (toTrash)
+        for (int i=0; i<UE->frame_parms.nb_antennas_rx; i++)
+          free(rxp[i]);
+    }
+  }
+}
+
 void readFrame(PHY_VARS_NR_UE *UE,  openair0_timestamp *timestamp, bool toTrash) {
 
   void *rxp[NB_ANTENNAS_RX];
@@ -507,6 +593,7 @@ void *UE_thread(void *arg) {
   UE->rfdevice.host_type = RAU_HOST;
   UE->lost_sync = 0;
   UE->is_synchronized = 0;
+  UE->max_delay_offset=MAX_OFFSET_PER_FRAME;
   AssertFatal(UE->rfdevice.trx_start_func(&UE->rfdevice) == 0, "Could not start the device\n");
 
   notifiedFIFO_t nf;
@@ -550,6 +637,22 @@ void *UE_thread(void *arg) {
         syncRunning=false;
         syncData_t *tmp=(syncData_t *)NotifiedFifoData(res);
         if (UE->is_synchronized) {
+            //++++++add_yjn+++++++++初始同步后的pss定时频偏估计
+            int track_update_position = UE->initial_sync_pos; // pss position
+            int track_update_winlen = UE->max_delay_offset * trashed_frames * 2;
+            bool win_overflow = ((track_update_winlen>>1) > track_update_position) || (track_update_position + track_update_winlen/2  > 2*UE->frame_parms.samples_per_frame); // 左右溢出
+            if (win_overflow){ 
+            LOG_I(PHY,"<<<<<<<<<<<<<<<<<<<<<<   Track Adjustment   >>>>>>>>>>>>>>>>>>>>>>\n");
+              read_one_frame(UE, &timestamp, true);
+              trashed_frames+=1;
+              track_update_position = (track_update_position + UE->frame_parms.samples_per_frame)%( UE->frame_parms.samples_per_frame<<1); //TODO: fixme
+            }
+
+            readFrame(UE, &timestamp, false);  //add_yjn，读取两帧
+            trashed_frames+=2;                 //add_yjn
+            syncUpdateTrack(UE, track_update_position, track_update_winlen);   //add_yjn同步线程，由pss计算rx_offset，track_sync_fo;
+            //++++++end+++++++++++++
+            
           decoded_frame_rx=(((mac->mib->systemFrameNumber.buf[0] >> mac->mib->systemFrameNumber.bits_unused)<<4) | tmp->proc.decoded_frame_rx);
           // shift the frame index with all the frames we trashed meanwhile we perform the synch search
           decoded_frame_rx=(decoded_frame_rx + UE->init_sync_frame + trashed_frames) % MAX_FRAME_NUMBER;
