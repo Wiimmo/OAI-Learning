@@ -81,6 +81,7 @@
 #define SYNC_TMP_SIZE                  (NB_ANTENNAS_RX*SYNCHRO_FFT_SIZE_MAX*IQ_SIZE) /* to be aligned with existing lte synchro */
 #define SYNCF_TMP_SIZE                 (SYNCHRO_FFT_SIZE_MAX*IQ_SIZE)
 
+
 /************* STRUCTURES *****************************************/
 
 
@@ -113,11 +114,28 @@ EXTERN int16_t *primary_synchro_time_nr[NUMBER_PSS_SEQUENCE]
 #endif
 ;
 
-EXTERN int64_t *pss_corr_ue[NUMBER_PSS_SEQUENCE]
+// EXTERN int64_t *pss_corr_ue[NUMBER_PSS_SEQUENCE]
+// #ifdef INIT_VARIABLES_PSS_NR_H
+// = { NULL, NULL, NULL}
+// #endif
+// ;
+
+EXTERN int16_t *dpss_seq_nr[NUMBER_DPSS_SEQUENCE]
 #ifdef INIT_VARIABLES_PSS_NR_H
-= { NULL, NULL, NULL}
+= { NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL}
 #endif
 ;
+EXTERN int16_t *dpss_equ_seq[NUMBER_DPSS_SEQUENCE*NUMBER_PSS_SEQUENCE]
+#ifdef INIT_VARIABLES_PSS_NR_H
+= { NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL}
+#endif
+;
+EXTERN int16_t *primary_synchro_time_nr_fo[NUMBER_PSS_SEQUENCE*(NUMBER_DPSS_SEQUENCE+1)]
+#ifdef INIT_VARIABLES_PSS_NR_H
+= { NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL}
+#endif
+;
+
 
 /* profiling structure */
 EXTERN time_stats_t generic_time[TIME_LAST];
@@ -134,12 +152,19 @@ void init_context_pss_nr(NR_DL_FRAME_PARMS *frame_parms_ue);
 void free_context_pss_nr(void);
 int set_pss_nr(int ofdm_symbol_size);
 int pss_synchro_nr(PHY_VARS_NR_UE *PHY_vars_UE, int is, int rate_change);
+int pss_track_synchro_nr(PHY_VARS_NR_UE *PHY_vars_UE, int position,int length, int rate_change);
 int pss_search_time_nr(int **rxdata, ///rx data in time domain
                        NR_DL_FRAME_PARMS *frame_parms,
 		       int fo_flag,
                        int is,
                        int *eNB_id,
 		       int *f_off);
+int pss_search_time_track_nr(int **rxdata, ///rx data in time domain
+                       NR_DL_FRAME_PARMS *frame_parms,
+                       int position,
+                       int length,
+                       int eNB_id,
+		                   int *f_off);
 
 #endif
 #undef EXTERN

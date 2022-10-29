@@ -116,6 +116,7 @@ double          rx_gain_off = 0.0;
 char             *usrp_args = NULL;
 char       *rrc_config_path = NULL;
 int               dumpframe = 0;
+int32_t       doppler_shift=0;       
 
 uint64_t        downlink_frequency[MAX_NUM_CCs][4];
 int32_t         uplink_frequency_offset[MAX_NUM_CCs][4];
@@ -333,7 +334,7 @@ void set_options(int CC_id, PHY_VARS_NR_UE *UE){
 
 void init_openair0(void) {
   int card;
-  int freq_off = 0;
+  int freq_off = doppler_shift;
   NR_DL_FRAME_PARMS *frame_parms = &PHY_vars_UE_g[0][0]->frame_parms;
 
   for (card=0; card<MAX_CARDS; card++) {

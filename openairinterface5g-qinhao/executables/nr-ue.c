@@ -210,9 +210,11 @@ static void UE_synch(void *arg) {
 
       uint64_t dl_carrier, ul_carrier;
       nr_get_carrier_frequencies(UE, &dl_carrier, &ul_carrier);
-
+      dl_carrier=openair0_cfg->rx_freq[0]; //doppler shift test
+      ul_carrier=openair0_cfg->tx_freq[0]; //doppler shift test
+      
       if (nr_initial_sync(&syncD->proc, UE, 2, get_softmodem_params()->sa, get_nrUE_params()->nr_dlsch_parallel) == 0) {
-        freq_offset = UE->common_vars.freq_offset; // frequency offset computed with pss in initial sync
+        freq_offset = -UE->common_vars.freq_offset; // frequency offset computed with pss in initial sync
         hw_slot_offset = ((UE->rx_offset<<1) / UE->frame_parms.samples_per_subframe * UE->frame_parms.slots_per_subframe) +
                          round((float)((UE->rx_offset<<1) % UE->frame_parms.samples_per_subframe)/UE->frame_parms.samples_per_slot0);
 

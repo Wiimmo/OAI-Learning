@@ -238,7 +238,8 @@ int nr_initial_sync(UE_nr_rxtx_proc_t *proc,
 
     /* process pss search on received buffer */
     sync_pos = pss_synchro_nr(ue, is, NO_RATE_CHANGE);
-
+    if (sync_pos<0) continue;  // 如果PSS检测失败，则不进行频偏补偿等操作
+    
     if (sync_pos >= fp->nb_prefix_samples)
       ue->ssb_offset = sync_pos - fp->nb_prefix_samples;
     else
@@ -251,20 +252,25 @@ int nr_initial_sync(UE_nr_rxtx_proc_t *proc,
 
     // digital compensation of FFO for SSB symbols
     if (ue->UE_fo_compensation){  
-	double s_time = 1/(1.0e3*fp->samples_per_subframe);  // sampling time
-	double off_angle = -2*M_PI*s_time*(ue->common_vars.freq_offset);  // offset rotation angle compensation per sample
+        double s_time = 1/(1.0e3*fp->samples_per_subframe);  // sampling time
+        double off_angle = 2*M_PI*s_time*(ue->common_vars.freq_offset);  // offset rotation angle compensation per sample
+        LOG_I(PHY,"PSS Compensation %d Hz \n",ue->common_vars.freq_offset);
+        // int start = is*fp->samples_per_frame+ue->ssb_offset;  // start for offset correction is at ssb_offset (pss time position)
+        // int end = start + 4*(fp->ofdm_symbol_size + fp->nb_prefix_samples);  // loop over samples in 4 symbols (ssb size), including prefix  
+        // start for offset correction
+        int start = sa ? is*fp->samples_per_frame : is*fp->samples_per_frame + ue->ssb_offset;
 
-	int start = is*fp->samples_per_frame+ue->ssb_offset;  // start for offset correction is at ssb_offset (pss time position)
-  	int end = start + 4*(fp->ofdm_symbol_size + fp->nb_prefix_samples);  // loop over samples in 4 symbols (ssb size), including prefix  
+        // loop over samples
+       int end = sa ? n_frames*fp->samples_per_frame-1 : start + 4*(fp->ofdm_symbol_size + fp->nb_prefix_samples);
 
-	for(int n=start; n<end; n++){  	
-	  for (int ar=0; ar<fp->nb_antennas_rx; ar++) {
-		re = ((double)(((short *)ue->common_vars.rxdata[ar]))[2*n]);
-		im = ((double)(((short *)ue->common_vars.rxdata[ar]))[2*n+1]);
-		((short *)ue->common_vars.rxdata[ar])[2*n] = (short)(round(re*cos(n*off_angle) - im*sin(n*off_angle))); 
-		((short *)ue->common_vars.rxdata[ar])[2*n+1] = (short)(round(re*sin(n*off_angle) + im*cos(n*off_angle)));
-	  }
-	}
+        for(int n=start; n<end; n++){  	
+          for (int ar=0; ar<fp->nb_antennas_rx; ar++) {
+          re = ((double)(((short *)ue->common_vars.rxdata[ar]))[2*n]);
+          im = ((double)(((short *)ue->common_vars.rxdata[ar]))[2*n+1]);
+          ((short *)ue->common_vars.rxdata[ar])[2*n] = (short)(round(re*cos(n*off_angle) - im*sin(n*off_angle))); 
+          ((short *)ue->common_vars.rxdata[ar])[2*n+1] = (short)(round(re*sin(n*off_angle) + im*cos(n*off_angle)));
+          }
+        }
     }
 
     /* check that SSS/PBCH block is continuous inside the received buffer */
