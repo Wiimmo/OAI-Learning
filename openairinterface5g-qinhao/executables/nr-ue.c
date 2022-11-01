@@ -100,26 +100,44 @@ typedef enum {
   si = 2
 } sync_mode_t;
 
+void cfo_compensation(int32_t* rxdata, int start, int end, double off_angle){
+  double re,im;
+  int BlockSize = end - start;
+  int alignedstart = 8-(start%8);
+  int alignedend = BlockSize-(end%8);
+  
+  for(int n=0; n<alignedstart; n++){
+    re = ((double)(((short *)rxdata))[2*n]);
+    im = ((double)(((short *)rxdata))[2*n+1]);
+    ((short *)rxdata)[2*n] = (short)(round(re*cos(n*off_angle) - im*sin(n*off_angle)));
+    ((short *)rxdata)[2*n+1] = (short)(round(re*sin(n*off_angle) + im*cos(n*off_angle)));
+  }
+
+  fre_offset_compensation_simd(rxdata,alignedstart,alignedend,off_angle);
+
+  for(int n=alignedend; n<BlockSize; n++){
+      re = ((double)(((short *)rxdata))[2*n]);
+      im = ((double)(((short *)rxdata))[2*n+1]);
+      ((short *)rxdata)[2*n] = (short)(round(re*cos(n*off_angle) - im*sin(n*off_angle)));
+      ((short *)rxdata)[2*n+1] = (short)(round(re*sin(n*off_angle) + im*cos(n*off_angle)));
+  } 
+  return;
+}
+
 int syncUpdateTrack(PHY_VARS_NR_UE *UE, int position, int length)
 {
   LOG_I(PHY,"<<<<<<<<<<<<<<<<<<<<< Track update Start >>>>>>>>>>>>>>>>>>>>>>\n");
   LOG_I(PHY,"[UPDATE SYNC] Search position = %d, range = %d (samples)\n",position,length);
   //* 滑动窗数据频偏补偿 *//
-  // if(UE->UE_fo_compensation){
-    
-  //     double im, re;
-  //     double s_time = 1/(1.0e3*UE->frame_parms.samples_per_subframe);  // sampling time
-  //     double off_angle = 2*M_PI*s_time*(UE->common_vars.freq_offset);
-  //     int start= position-(length>>1);
-  //     int end = position+(length>>1);
-  //     int ar = 0;
-  //     for(int n=start; n<end; n++){
-  //         re = ((double)(((short *)UE->common_vars.rxdata[ar]))[2*n]);
-  //         im = ((double)(((short *)UE->common_vars.rxdata[ar]))[2*n+1]);
-  //         ((short *)UE->common_vars.rxdata[ar])[2*n] = (short)(round(re*cos(n*off_angle) - im*sin(n*off_angle)));
-  //         ((short *)UE->common_vars.rxdata[ar])[2*n+1] = (short)(round(re*sin(n*off_angle) + im*cos(n*off_angle)));
-  //     }
-  // }
+  if(UE->UE_fo_compensation){
+      double s_time = 1/(1.0e3*UE->frame_parms.samples_per_subframe);  // sampling time
+      double off_angle = 2*M_PI*s_time*(UE->common_vars.freq_offset);
+      int start= position-(length>>1);
+      int end = position+(length>>1);
+      for (int i=0; i<UE->frame_parms.nb_antennas_rx; i++){ // 下行补偿
+          cfo_compensation((int32_t *)&UE->common_vars.rxdata[i][start],start,end, off_angle); 
+      }
+  }
   
   if(nr_track_sync(UE, position, length, 0) == 0) {
         LOG_I(PHY,"<<<<<<<<<<<<<<<<<<<<< Track update Success >>>>>>>>>>>>>>>>>>>>>>\n");
@@ -275,7 +293,10 @@ static void UE_synch(void *arg) {
 
         // rerun with new cell parameters and frequency-offset
         // todo: the freq_offset computed on DL shall be scaled before being applied to UL
-        nr_rf_card_config_freq(&openair0_cfg[UE->rf_map.card], ul_carrier, dl_carrier, freq_offset);
+        /*
+        nr_rf_card_config_freq(&openair0_cfg[UE->rf_map.card], ul_carrier, dl_carrier, freq_offset);        
+        */
+
 
         LOG_I(PHY,"Got synch: hw_slot_offset %d, carrier off %d Hz, rxgain %f (DL %f Hz, UL %f Hz)\n",
               hw_slot_offset,
@@ -543,27 +564,25 @@ void syncInFrame(PHY_VARS_NR_UE *UE, openair0_timestamp *timestamp) {
 
 }
 
-int computeSamplesShift(PHY_VARS_NR_UE *UE) {
+int computeSamplesShift(PHY_VARS_NR_UE *UE, notifiedFIFO_t *syncnf, notifiedFIFO_t *syncfreeBlocks) {
+    if(UE->SamplesShift_Ready){
+        // notifiedFIFO_elt_t *syncres=pullTpool(syncnf, &(get_nrUE_params()->SyncTpool));
+        notifiedFIFO_elt_t *syncres=tryPullTpool(syncnf, &(get_nrUE_params()->SyncTpool));
+        if(syncres){
+            pushNotifiedFIFO_nothreadSafe(syncfreeBlocks,syncres);
 
-  // compute TO compensation that should be applied for this frame
-  if ( UE->rx_offset < UE->frame_parms.samples_per_frame/2  &&
-       UE->rx_offset > 0 ) {
-    LOG_I(PHY,"!!!adjusting -1 samples!!! rx_offset == %d\n", UE->rx_offset);
-    UE->rx_offset   = 0; // reset so that it is not applied falsely in case of SSB being only in every second frame
-    UE->max_pos_fil = 0; // reset IIR filter when sample shift is applied
-    return -1 ;
-  }
-
-  if ( UE->rx_offset > UE->frame_parms.samples_per_frame/2 &&
-       UE->rx_offset < UE->frame_parms.samples_per_frame ) {
-    int rx_offset = UE->rx_offset - UE->frame_parms.samples_per_frame;
-    LOG_I(PHY,"!!!adjusting +1 samples!!! rx_offset == %d\n", rx_offset);
-    UE->rx_offset   = 0; // reset so that it is not applied falsely in case of SSB being only in every second frame
-    UE->max_pos_fil = 0; // reset IIR filter when sample shift is applied
-    return 1;
-  }
-
-  return 0;
+            int samples_shift = (UE->delay_offset - UE->rx_offset);
+            if (samples_shift != 0) 
+                LOG_I(NR_PHY,"Adjusting frame in time by %i samples, rx_offset = %d, delay_offset = %d\n", samples_shift, UE->rx_offset,UE->delay_offset);
+            UE->SamplesShift_Ready = 0; // reset sampleshift flag
+            UE->rx_offset   = 0; // reset so that it is not applied falsely in case of SSB being only in every second frame
+            UE->max_pos_fil = 0; // reset IIR filter when sample shift is applied
+            return samples_shift;
+        }else{
+          LOG_I(PHY,"Waiting track thread!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n");
+        } 
+    }
+    return 0;
 }
 
 static inline int get_firstSymSamp(uint16_t slot, NR_DL_FRAME_PARMS *fp) {
@@ -602,6 +621,12 @@ void *UE_thread(void *arg) {
   notifiedFIFO_t freeBlocks;
   initNotifiedFIFO_nothreadSafe(&freeBlocks);
 
+  notifiedFIFO_t syncnf;
+  initNotifiedFIFO(&syncnf);
+
+  notifiedFIFO_t syncfreeBlocks;
+  initNotifiedFIFO(&syncfreeBlocks);
+
   int nbSlotProcessing=0;
   int thread_idx=0;
   NR_UE_MAC_INST_t *mac = get_mac_inst(0);
@@ -617,6 +642,11 @@ void *UE_thread(void *arg) {
     initNotifiedFIFO(&curMsg->txFifo);
     pushNotifiedFIFO_nothreadSafe(&freeBlocks, newElt);
   }
+
+  notifiedFIFO_elt_t *trackSyncElt=newNotifiedFIFO_elt(sizeof(syncData_t),0,&syncnf,UE_TrackSync_thread);
+  syncData_t *trackSyncData=(syncData_t *)NotifiedFifoData(trackSyncElt);
+  initNotifiedFIFO(&trackSyncData->txFifo);
+  pushNotifiedFIFO_nothreadSafe(&syncfreeBlocks, trackSyncElt);
 
   while (!oai_exit) {
     if (UE->lost_sync) {
@@ -747,7 +777,7 @@ void *UE_thread(void *arg) {
       readBlockSize=get_readBlockSize(slot_nr, &UE->frame_parms);
       writeBlockSize=UE->frame_parms.get_samples_per_slot((slot_nr + DURATION_RX_TO_TX - NR_RX_NB_TH) % nb_slot_frame, &UE->frame_parms);
     } else {
-      UE->rx_offset_diff = computeSamplesShift(UE);
+      UE->rx_offset_diff = computeSamplesShift(UE,&syncnf,&syncfreeBlocks);
       readBlockSize=get_readBlockSize(slot_nr, &UE->frame_parms) -
                     UE->rx_offset_diff;
       writeBlockSize=UE->frame_parms.get_samples_per_slot((slot_nr + DURATION_RX_TO_TX - NR_RX_NB_TH) % nb_slot_frame, &UE->frame_parms)- UE->rx_offset_diff;
@@ -811,6 +841,35 @@ void *UE_thread(void *arg) {
       timing_advance = UE->timing_advance;
     }
 
+ //=============================================================================================//
+    //=======================================频偏补偿/预补偿=======================================//
+  //=============================================================================================//  
+    // digital compensation of FFO for SSB symbols
+    if (UE->UE_fo_compensation){
+      start_meas(&UE->generic_stat);
+      int start_rx = firstSymSamp+UE->frame_parms.get_samples_slot_timestamp(slot_nr,&UE->frame_parms,0);
+      int end_rx = start_rx + readBlockSize;
+      int start_tx = UE->frame_parms.get_samples_slot_timestamp(((slot_nr + DURATION_RX_TO_TX - NR_RX_NB_TH)%nb_slot_frame),&UE->frame_parms,0);
+      int end_tx = start_tx + writeBlockSize;
+      double s_time = 1/(1.0e3*UE->frame_parms.samples_per_subframe);  // sampling time
+      double off_angle = 2*M_PI*s_time*(UE->track_sync_fo);  // offset rotation angle compensation per sample 
+
+      for (int i=0; i<UE->frame_parms.nb_antennas_rx; i++){ // 下行补偿
+          int32_t* rxdata_start = (int32_t*)&(UE->common_vars.rxdata[i][start_rx]);
+          cfo_compensation(rxdata_start,start_rx,end_rx, off_angle); 
+      }
+      // TODO: 修改OAI大频偏测试方案,调整gNB的Tx/Rx freq.  
+      for (int i=0; i<UE->frame_parms.nb_antennas_tx; i++){// 上行预补偿 (当前测试环境下ul_offangle = -dl_offangle, 接信道模拟器ul_offangle = -dl_offangle)
+          int32_t* txdata_start = (int32_t*)&UE->common_vars.txdata[i][start_tx];
+          cfo_compensation(txdata_start,start_tx,end_tx, off_angle); 
+      }
+      stop_meas(&UE->generic_stat);
+      int duration_ms = UE->generic_stat.p_time/(cpuf*1000.0);
+      LOG_D(PHY,"[SYNC CFO] DL COMPENSATE %d, UL COMPENSATE %d\n",UE->track_sync_fo,-UE->track_sync_fo);
+      LOG_D(PHY,"SYNC CFO COMPENSATE execution duration %4d microseconds \n", duration_ms);
+    }
+    //++++++++++++++++++++++++++++++++++end
+
     int flags = 0;
     int slot_tx_usrp = slot_nr + DURATION_RX_TO_TX - NR_RX_NB_TH;
 
@@ -856,6 +915,19 @@ void *UE_thread(void *arg) {
     LOG_D(PHY,"Number of slots being processed at the moment: %d\n",nbSlotProcessing);
     pushTpool(&(get_nrUE_params()->Tpool), msgToPush);
 
+    //* Track sync *//
+    int slot_ssb  = is_ssb_in_slot(&UE->nrUE_config,curMsg->proc.frame_rx, curMsg->proc.nr_slot_rx,  &UE->frame_parms);
+    if (slot_ssb==1)
+    {
+        notifiedFIFO_elt_t *syncmsgToPush;
+        syncmsgToPush=pullNotifiedFIFO_nothreadSafe(&syncfreeBlocks);
+        AssertFatal(syncmsgToPush!= NULL,"chained list failure");
+
+        syncData_t *syncMsg=(syncData_t *)NotifiedFifoData(syncmsgToPush);
+        syncMsg->UE=UE;
+        pushTpool(&(get_nrUE_params()->SyncTpool), syncmsgToPush);
+        UE->SamplesShift_Ready = 1; // set ready flag
+    }
   } // while !oai_exit
 
   return NULL;

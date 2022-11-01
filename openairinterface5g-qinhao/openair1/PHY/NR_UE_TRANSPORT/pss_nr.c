@@ -1136,7 +1136,7 @@ int pss_search_time_nr(int **rxdata, ///rx data in time domain
         result  = dot_product64((short*)primary_synchro_time_nr_fo[pss_source*(NUMBER_DPSS_SEQUENCE+1)+fo_idx], 
                                     (short*)&(rxdata[0][peak_position+is*frame_parms->samples_per_frame]), // 修改：调用前完成数据截取
                                     frame_parms->ofdm_symbol_size,
-                                    pss_corr_shift); 
+                                    15); 
         ifo_result = abs64(result);
         //LOG_I(PHY,"[UE_SYNC_IFO]  IFO %d cor result: ifo_result = %llu\n",ifo_est,(unsigned long long)ifo_result);
         if (ifo_result > ifo_peak_value) {
@@ -1256,7 +1256,7 @@ int pss_search_time_track_nr(int **rxdata, ///rx data in time domain
         ffo_cp=-atan2(im3,re3)/2/M_PI; // ffo=-angle()/2/pi
         // ffo_cp=0;
         *f_off += ffo_cp*frame_parms->subcarrier_spacing;  
-        LOG_I(PHY,"[TRACK SYNC]  Track sync result:  TrackSNR=%d, sync_pos=%d, ffo_cp=%f, cfo_track=%d \n",trackSNR,peak_position,ffo_cp,*f_off);
+        LOG_I(PHY,"[TRACK SYNC] SNR=%d, sync_pos=%d, ffo_cp=%f, cfo_track=%d \n",trackSNR,peak_position,ffo_cp,*f_off);
         return(peak_position);
 }
 
