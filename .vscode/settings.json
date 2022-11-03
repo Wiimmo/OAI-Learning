@@ -1,0 +1,18 @@
+{
+    "files.associations": {
+        "atomic": "c",
+        "chrono": "c",
+        "cstdint": "c",
+        "array": "c",
+        "hash_map": "c",
+        "hash_set": "c",
+        "deque": "c",
+        "list": "c",
+        "string": "c",
+        "unordered_map": "c",
+        "unordered_set": "c",
+        "vector": "c",
+        "string_view": "c",
+        "initializer_list": "c"
+    }
+}

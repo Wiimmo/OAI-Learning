@@ -669,7 +669,7 @@ void *UE_thread(void *arg) {
         if (UE->is_synchronized) {
             //++++++add_yjn+++++++++初始同步后的pss定时频偏估计
             int track_update_position = UE->initial_sync_pos; // pss position
-            int track_update_winlen = UE->max_delay_offset * trashed_frames * 2;
+            int track_update_winlen = UE->max_delay_offset * trashed_frames * 2 < UE->frame_parms.ofdm_symbol_size ?  UE->frame_parms.ofdm_symbol_size : UE->max_delay_offset * trashed_frames * 2;
             bool win_overflow = ((track_update_winlen>>1) > track_update_position) || (track_update_position + track_update_winlen/2  > 2*UE->frame_parms.samples_per_frame); // 左右溢出
             if (win_overflow){ 
             LOG_I(PHY,"<<<<<<<<<<<<<<<<<<<<<<   Track Adjustment   >>>>>>>>>>>>>>>>>>>>>>\n");
